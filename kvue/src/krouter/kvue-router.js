@@ -1,21 +1,55 @@
+import View from "./krouter-view";
+import Link from "./krouter-link";
+
 //实现install 方法
 let Vue;
 class VueRouter {
   constructor(options) {
     this.$options = options;
 
-    // 给指定对象定义响应式属性
-    Vue.util.defineReactive(
-      this,
-      "current",
-      window.location.hash.slice(1) || "/"
-    );
+    this.current = window.location.hash.slice(1) || "/";
+    Vue.util.defineReactive(this, "matched", []);
+    //match 方法可以递归的遍历路由表,获得匹配
+
+    this.match();
 
     // 监控hash change
-    window.addEventListener("hashchange", () => {
-      // #/about  => /about
-      this.current = window.location.hash.slice(1);
-    });
+    window.addEventListener("hashchange", this.onHashChange.bind(this));
+    window.addEventListener("load", this.onHashChange.bind(this));
+
+    // //创建一个路由映射表
+    // this.routeMap = {};
+    // options.routes.forEach((route) => {
+    //   this.routeMap[route.path] = route;
+    // });
+  }
+  onHashChange() {
+    this.current = window.location.hash.slice(1);
+
+    this.matched = [];
+    this.match();
+  }
+
+  match(routes) {
+    routes = routes || this.$options.routes;
+
+    //递归遍历路由表
+
+    for (const route of routes) {
+      if (route.path === "/" && this.current === "/") {
+        this.matched.push(route);
+        return;
+      }
+
+      //about/info
+      if (route.path !== "/" && this.current.indexOf(route.path) != -1) {
+        this.matched.push(route);
+        if (route.children) {
+          this.match(route.children);
+        }
+        return;
+      }
+    }
   }
 }
 
@@ -35,35 +69,8 @@ VueRouter.install = function(_Vue) {
     },
   });
   // 实现两个全局组件router-link和router-view
-  Vue.component("router-link", {
-    props: {
-      to: {
-        type: String,
-        require: true,
-      },
-    },
-    render(h) {
-      return h(
-        "a",
-        {
-          attrs: { href: "#" + this.to },
-        },
-        this.$slots.default
-      );
-    },
-  });
-  Vue.component("router-view", {
-    render(h) {
-      let component = null;
-      const route = this.$router.$options.routes.find(
-        (route) => route.path === this.$router.current
-      );
-      if (route) {
-        component = route.component;
-      }
-      return h(component);
-    },
-  });
+  Vue.component("router-link", Link);
+  Vue.component("router-view", View);
 };
 
 export default VueRouter;
