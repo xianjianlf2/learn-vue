@@ -1,29 +1,42 @@
+// 给一个obj定义一个响应式的属性
 function defineReactive(obj, key, val) {
-  //递归
-
+  // 递归
+  // val如果是个对象，就需要递归处理
   observe(val);
+
+  // 创建Dep实例
+  const dep = new Dep();
+
   Object.defineProperty(obj, key, {
     get() {
+      // console.log("get", key);
+      // 依赖关系收集
+      Dep.target && dep.addDep(Dep.target);
       return val;
     },
     set(newVal) {
       if (newVal !== val) {
-        //防止用户再次赋值
-        observe(newVal);
+        // console.log("set", key);
         val = newVal;
+        // 新值如果是对象，仍然需要递归遍历处理
+        observe(newVal);
+        // update()
+        dep.notify();
       }
     },
   });
 }
 
-//遍历所有传入obj的属性,执行响应式处理
+// 遍历响应式处理
 function observe(obj) {
-  //首先判断Obj是对象
   if (typeof obj !== "object" || obj == null) {
     return obj;
   }
-  Object.keys(obj).forEach((key) => defineReactive(obj, key, obj[key]));
+
+  new Observer(obj);
 }
+
+// 能够将传入对象中的所有key代理到指定对象上
 function proxy(vm) {
   Object.keys(vm.$data).forEach((key) => {
     Object.defineProperty(vm, key, {
@@ -36,122 +49,167 @@ function proxy(vm) {
     });
   });
 }
+
+class Observer {
+  constructor(obj) {
+    // 判断传入obj类型，做相应处理
+    if (Array.isArray(obj)) {
+      // todo
+    } else {
+      this.walk(obj);
+    }
+  }
+
+  walk(obj) {
+    Object.keys(obj).forEach((key) => defineReactive(obj, key, obj[key]));
+  }
+}
+
 class KVue {
   constructor(options) {
-    //0.保存选项
+    // 0.保存选项
     this.$options = options;
     this.$data = options.data;
-    //1.响应式   递归遍历data中的对象,做响应式处理
-    observe(this.$data);
 
-    // 设置代理 proxy(this)
+    // 1.对data做响应式处理
+    observe(options.data);
+
+    // 2.代理
     proxy(this);
-    // 2.编译模板
 
+    // 3.编译
     new Compile(options.el, this);
   }
 }
-//遍历模板树,解析其中动态部分,初始化并获得更新函数
+
 class Compile {
   constructor(el, vm) {
-    //保存一下实例
     this.$vm = vm;
-    //获取数组元素的dom 节点
-    const dom = document.querySelector(el);
+    this.$el = document.querySelector(el);
 
-    //编译
-    this.compile(dom);
+    if (this.$el) {
+      this.compile(this.$el);
+    }
   }
 
-  compile(el) {
-    //遍历el
-    el.childNodes.forEach((node) => {
-      if (this.isElement(node)) {
-        //元素:解析动态的指令,属性绑定,事件
+  // 遍历node，判断节点类型，做不同处理
+  compile(node) {
+    const childNodes = node.childNodes;
 
-        this.compileElement(node);
-
-        //递归
-        if (node.childNodes.length > 0) {
-          this.compile(node);
+    Array.from(childNodes).forEach((n) => {
+      // 判断类型
+      if (this.isElement(n)) {
+        // console.log('编译元素', n.nodeName);
+        this.compileElement(n);
+        // 递归
+        if (n.childNodes.length > 0) {
+          this.compile(n);
         }
-      } else if (this.isInter(node)) {
-        //插值表达式
-        // console.log("编译插值", node.textContent);
-        this.compileText(node);
+      } else if (this.isInter(n)) {
+        // 动态插值表达式
+        // console.log('编译文本', n.textContent);
+        this.compileText(n);
       }
     });
   }
-  compileElement(node) {
-    const attrs = node.attributes;
+
+  isElement(n) {
+    return n.nodeType === 1;
+  }
+
+  // 形如{{ooxx}}
+  isInter(n) {
+    return n.nodeType === 3 && /\{\{(.*)\}\}/.test(n.textContent);
+  }
+
+  // 编译插值文本 {{ooxx}}
+  compileText(n) {
+    // 获取表达式
+    // n.textContent = this.$vm[RegExp.$1];
+    this.update(n, RegExp.$1, "text");
+  }
+
+  // 编译元素：遍历它的所有特性，看是否k-开头指令，或者@事件
+  compileElement(n) {
+    const attrs = n.attributes;
     Array.from(attrs).forEach((attr) => {
-      //判断是否是动态属性
-      //condition 1 :instruction
+      // k-text="xxx"
+      // name = k-text,value = xxx
       const attrName = attr.name;
       const exp = attr.value;
+      // 指令
       if (this.isDir(attrName)) {
+        // 执行特定指令处理函数
         const dir = attrName.substring(2);
-        //检验当前指令是否是合法的元素
-        //跳转到 k-text  执行text函数
-        this[dir] && this[dir](node, exp);
+        this[dir] && this[dir](n, exp);
       }
     });
   }
 
-  //编译文本
-  compileText(node) {
-    this.update(node, RegExp.$1, "text");
-    // node.textContent = this.$vm[RegExp.$1];
-  }
-  isElement(node) {
-    return node.nodeType === 1;
-  }
-  //{{xxxx}}
-  isInter(node) {
-    return node.nodeType === 3 && /\{\{(.*)\}\}/.test(node.textContent);
-  }
-  isDir(attrName) {
-    return attrName.startsWith("k-");
-  }
-
-  //处理所有动态的绑定
-  //dir 指的是指令的名称
   update(node, exp, dir) {
-    //1.初始化
+    // 1.init
     const fn = this[dir + "Updater"];
     fn && fn(node, this.$vm[exp]);
 
-    //2.创建Watcher实例,负责后续的更新
+    // 2.update
+    new Watcher(this.$vm, exp, (val) => {
+      fn && fn(node, val);
+    });
   }
 
-  //k-text
+  // k-text
   text(node, exp) {
     this.update(node, exp, "text");
   }
+
   textUpdater(node, val) {
     node.textContent = val;
   }
 
-  //k-html
+  // k-html
   html(node, exp) {
-    node.innerHTML = this.$vm[exp];
+    this.update(node, exp, "html");
+  }
+
+  htmlUpdater(node, val) {
+    node.innerHTML = val;
+  }
+
+  isDir(attrName) {
+    return attrName.startsWith("k-");
   }
 }
 
-//负责具体节点的更新
+// 负责dom更新
 class Watcher {
   constructor(vm, key, updater) {
     this.vm = vm;
     this.key = key;
     this.updater = updater;
+
+    // 触发一下get
+    Dep.target = this;
+    this.vm[this.key];
+    Dep.target = null;
   }
 
+  // 将来会被Dep调用
   update() {
-    const val = this.vm[this.key];
-    this.updater.call(this.vm, val);
+    this.updater.call(this.vm, this.vm[this.key]);
   }
 }
 
-//Dep和响应式属性之间有一对一关系
-// 负责通知watcher更新
-class Dep {}
+// 保存watcher实例的依赖类
+class Dep {
+  constructor() {
+    this.deps = [];
+  }
+  // 此处dep就是Watcher的实例
+  addDep(dep) {
+    // 创建依赖关系时调用
+    this.deps.push(dep);
+  }
+  notify() {
+    this.deps.forEach((dep) => dep.update());
+  }
+}
